@@ -1,4 +1,7 @@
-'''Description
+'''
+Tested on a Raspberry Pi 4 using Spyder 3.3.3 (Python 3.7.4).
+
+Description
 A class for the Atlas Scientific EC EZO.
 
 Author: iblack
