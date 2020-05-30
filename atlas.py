@@ -1,20 +1,27 @@
+'''Description
+A class for the Atlas Scientific EC EZO.
+
+Author: iblack
+Date: 2020-05-30
+'''
+
+
 import fcntl
 import io
 import time
 
 class AtlasEC():
     def __init__(self,bus=1,address = 0x64):
-        self._bus = bus
-        self._address = address
-        self._slave = 0x703
+        slave = 0x703
         self._r = io.open("/dev/i2c-{}".format(bus),mode="rb",buffering=0)
         self._w = io.open("/dev/i2c-{}".format(bus),mode="wb",buffering=0)        
-        fcntl.ioctl(self._r,self._slave, self._address)
-        fcntl.ioctl(self._w,self._slave, self._address)
+        fcntl.ioctl(self._r, slave, address)
+        fcntl.ioctl(self._w, slave, address)
     
     
     def write_command(self,command):
         '''Main write command.
+        Encodes and writes a string to the EZO.
         Used by other functions to write commands to the EC EZO.
         Can be used independently, but user must know EC EZO command strings.
         
@@ -26,6 +33,7 @@ class AtlasEC():
     
     def read_response(self,num_bytes=32):
         '''Main read command.
+        Decodes and parses a response string from the EC EZO.
         Can be used independently from other functions.
         
         num_bytes -- the number of bytes to read from the EC EZO.
@@ -40,21 +48,46 @@ class AtlasEC():
         has a syntax error, so no data is returned.
         '''
         raw = self._r.read(num_bytes)        
-        if '\xff' in raw:
+        if '\xff' in str(raw):
             print('No data in EZO buffer.')
             return False
-        elif '\xfe' in raw:
+        elif '\xfe' in str(raw):
             print('EZO still processing request.')
             return False
-        elif '\x02' in raw:
+        elif '\x02' in str(raw):
             print('Command syntax error.')
             return False
         else:
             response = raw.decode()
-            for val in ['\x00','\x01']:
+            for val in ['\x01','\x00']:
                 response = response.replace(val,'')
-                return response
-    
+            return response
+
+
+    def output(self,params = ['EC','TDS','S','SG']): 
+        '''Set the data type output by the EC EZO.
+        params -- must be an array of strings, even if only one 
+            string is presented.
+        
+        This function first removes all variables from the output, and
+            then only enables values the user specifies.
+        
+        Finally, the function queries the output parameter and returns the 
+            set output to show the user the output has changed. 
+        '''
+        for p in ['EC','TDS','S','SG']: #Drop all params.
+            self.write_command('O,{},0'.format(str(p)))
+            time.sleep(0.3)                 
+        for param in params: #Only output user selected params.
+            self.write_command('O,{},1'.format(str(param)))
+            time.sleep(0.3)       
+            
+        #Check the output.
+        self.write_command('O,?')
+        time.sleep(0.3)
+        check = self.read_response()              
+        return check
+
     
     def take_sample(self):
         '''Take a sample and split output string by the commas.
@@ -63,7 +96,7 @@ class AtlasEC():
         single float value.
         '''       
         self.write_command('R')
-        time.sleep(0.6)
+        time.sleep(0.6) 
         data = self.read_response()
         banana = data.split(',')
         data_array = []
@@ -101,31 +134,12 @@ class AtlasEC():
             return None
 
 
-    def output(self,params = ['EC','TDS','S','SG']): 
-        '''Set the data type output by the EC EZO.
-        params -- must be an array of strings, even if only one 
-            string is presented.
-        
-        This function first removes all variables from the output, and
-            then only enables values the user specifies.
-        
-        Finally, the function queries the output parameter and returns the 
-            set output to show the user the output has changed. 
-        '''
-    
-        #Drop all params.
-        all_params = ['EC','TDS','S','SG']
-        for param in all_params:
-            self.write_command('O,{},0'.format(str(param)))
-            time.sleep(0.3)                 
-        #Then only set the ones the user wants.
-        for param in params:
-            self.write_command('O,{},1'.format(str(param)))
-            time.sleep(0.3)       
-        self.write_command('O,?')
-        time.sleep(0.3)
-        check = self.read_response()              
-        return check
+    def led_find(self,num_seconds = 30):
+        self.write_command('FIND')
+        time.sleep(num_seconds)
+        self.led_off()
+        self.led_on()
+
     
     
     def info(self):
@@ -283,6 +297,79 @@ class AtlasEC():
         print(msg)
         return msg
     
+    
+
+            
+    
+
+     
+        
+#------------------------------Under Development------------------------------#   
+    def cal_export(self,file = "EC_EZO_CAL.txt"):
+        '''Exports calibration information from the EZO to a text file
+        on the Raspberry Pi.
+        '''
+        self.write_command('EXPORT,?')
+        time.sleep(0.6)
+        data = self.read_response()
+        banana = data.split(',')
+        self._num_strings = int(banana[1])
+        self._num_bytes = int(banana[2])
+    
+        self.data_array = []
+        for i in range(self._num_strings):
+            self.write_command('EXPORT')
+            time.sleep(0.6)
+            data = self.read_response(120)
+            self.data_array.append(data)
+        
+        check = self._export_checksum()
+        
+        if check == True:
+            f = open(file,'w')
+            for cal_str in self.data_array:
+                f.write(cal_str + '\n')
+            f.close()           
+            return self.data_array 
+        else:
+            print('Calibration values corrupted during export.')
+            return False
+    
+    
+    def _export_checksum(self):
+        '''Compares number of bytes.
+        Takes the number of bytes value given by the 'EXPORT,?' command and
+        compares that value to the sum of bytes given by the each line of the
+        'EXPORT' command.
+        
+        If the two values match, then the calibration export was successful.
+        '''     
+        n_char = 0
+        for export_str in self.data_array:
+            length = len(export_str)
+            n_char = n_char + length
+        if n_char == self._num_bytes:
+            return True
+        else:
+            return False
+        
+        
+    def cal_import(self,file = "EC_EZO_CAL.txt"):
+        '''Import a calibration file.
+        Imports a previous fabricated file from cal_export, 
+        or a handcrafted file.
+        Files can only have up to 12 characters per line.
+        '''      
+        f = open(file,'r+')
+        data_array = f.readlines()
+        f.close()
+        for i in range(len(data_array)-1):
+            cal_string = data_array[i].replace('\n','')
+            self.write_command('IMPORT,{}'.format(cal_string))
+            time.sleep(0.6)
+            
+        return
+        
     def response_codes(self,enable = True):
         if enable is True:
             self.write_command('*OK,1')
@@ -293,23 +380,3 @@ class AtlasEC():
         
         data = self.read_response()
         return data
-            
-    
-    def find(self,num_seconds = 30):
-        self.write_command('FIND')
-        time.sleep(num_seconds)
-        self.write_command('L,1')
-        
-    def export_cal(self):
-        self.write_command('EXPORT,?')
-        time.sleep(0.6)
-        data = self.read_response()
-        banana = data.split(',')
-        num_strings = float(banana[len(banana)-1])
-        num_bytes = float(banana[-1])
-        self.write_command('EXPORT')
-        time.sleep(0.6)
-        data = self.read_response(120)
-        return data
-        
-    
