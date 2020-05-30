@@ -1,5 +1,5 @@
 # as_sensors
-Python 3 modules for working with Atlas Scientific sensors.
+A Python 3 module for working with the Atlas Scientific EC EZO attached to a Raspberry Pi.
 
 
 ## EC EZO
